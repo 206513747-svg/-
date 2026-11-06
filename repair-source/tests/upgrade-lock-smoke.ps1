@@ -49,4 +49,19 @@ Write-Host 'PASS competing window is blocked and cannot overwrite owner'
 Write-Host 'PASS same owner renews and releases its lock'
 Write-Host 'PASS corrupt lock fails closed and preserves evidence'
 Write-Host 'PASS expired lock is reclaimed through stale-file handoff'
+
+# Each short-lived command must also be non-reentrant, including two processes in the same AI window.
+$env:AI_LOCK_DIR = Join-Path $base 'ai-command-locks'
+$env:AI_NAME = 'test-ai'
+$env:AI_WIN = 'window-A'
+if (-not (Enter-UpgradeCommandLock)) { throw 'command lock could not be acquired' }
+if (Enter-UpgradeCommandLock) { throw 'same-window concurrent command bypassed the command lock' }
+if (-not (Exit-UpgradeCommandLock)) { throw 'command lock release failed' }
+if (-not (Enter-UpgradeCommandLock)) { throw 'command lock could not be reacquired after release' }
+$env:AI_WIN = 'window-B'
+if (Enter-UpgradeCommandLock) { throw 'different window of same AI bypassed command lock' }
+$env:AI_WIN = 'window-A'
+if (-not (Exit-UpgradeCommandLock)) { throw 'owner could not release command lock' }
+Write-Host 'PASS upgrade commands are serialized even for the same AI/window'
+
 Remove-Item -LiteralPath $base -Recurse -Force

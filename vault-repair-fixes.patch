@@ -1,0 +1,71 @@
+--- a/memory-sync.js
++++ b/memory-sync.js
+@@ -15,7 +15,7 @@
+ const path = require('path');
+ 
+ // ─── 路径 ───────────────────────────────────────────────────────────
+-const VAULT = 'D:\\Vault';
++const VAULT = path.resolve(process.env.VAULT_ROOT || path.join(__dirname, '..'));
+ const MEMORY_DIR = path.join(VAULT, 'vault-data');  // 已迁移：原 Claude记忆/ 废弃
+ const INBOX = path.join(VAULT, '00-Inbox · 收件箱');
+ const KANBAN_PATH = path.join(VAULT, '01-Projects · 项目', '_看板.md');
+@@ -41,6 +41,10 @@
+     const dir = path.dirname(p);
+     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+     atomicWrite(p, content, {}); // 写入宪法②③：原子写临时文件→rename（防中断落盘半截文件）
++    const persisted = fs.readFileSync(p, 'utf-8');
++    if (persisted !== content) {
++        throw new Error(`[memory-sync] 写后校验失败：${p}`);
++    }
+ }
+ 
+ /** 在 00-Inbox · 收件箱/复盘提醒/（含 YYYY-MM 月文件夹）中找到最新的一篇复盘文件，返回相对路径 */
+--- a/settle-session.ps1
++++ b/settle-session.ps1
+@@ -830,8 +830,24 @@
+ }
+ if ($DirCleanCount -gt 0) { Write-Output "dir-cleanup:$DirCleanCount" }
+ 
+-# 11. memory-sync: 自动生成_session-handoff.md(由内而外:memory-sync.js已存在,缺调用)
+-& node "$Vault\vault-scripts\memory-sync.js" 2>&1 | Out-Null
++# 11. memory-sync: 自动生成_session-handoff.md；失败必须阻断，不得记假成功
++$MemorySyncScript = Join-Path $Vault 'vault-scripts\memory-sync.js'
++$HandoffPath = Join-Path $Vault 'vault-data\_session-handoff.md'
++if (-not (Test-Path -LiteralPath $MemorySyncScript -PathType Leaf)) {
++    throw "memory-sync 脚本不存在：$MemorySyncScript"
++}
++$MemorySyncOutput = & node $MemorySyncScript 2>&1
++$MemorySyncExitCode = $LASTEXITCODE
++if ($MemorySyncExitCode -ne 0) {
++    $detail = ($MemorySyncOutput | Out-String).Trim()
++    throw "memory-sync 执行失败（rc=$MemorySyncExitCode）：$detail"
++}
++if (-not (Test-Path -LiteralPath $HandoffPath -PathType Leaf)) {
++    throw "memory-sync 未生成交接文件：$HandoffPath"
++}
++if ((Get-Item -LiteralPath $HandoffPath).Length -le 0) {
++    throw "memory-sync 生成的交接文件为空：$HandoffPath"
++}
+ $Changes += "memory-sync"
+ # （2026-08-11 精简：移除 startup-standard-read 挂载——gate 强制门已物理保证三卡已读，
+ #   不重复跑 node 进程省 token；脚本保留 vault-data/startup-standard-read.js 按需可跑）
+--- a/ai-lock.js
++++ b/ai-lock.js
+@@ -107,7 +107,7 @@
+   return {ok:false,busy:cur?{ai:cur.ai,win:cur.win,pid:cur.pid,age_s:Math.round((now()-cur.ts)/1000)}:{ai:'unknown'}};
+ }
+ function renew(name,ai){const l=lf(name);const o=read(l);if(!o)return{ok:false};if(!sameOwner(o,ai,winId(ai)))return{ok:false,notOwner:o.ai};o.ts=now();fs.writeFileSync(l,JSON.stringify(o));return{ok:true}}
+-function release(name,ai){const l=lf(name);const o=read(l);if(!o)return{ok:true};const win=winId(ai);if((ai&&o.ai&&o.ai!==ai)||(o.win||'')!==(win||''))return{ok:false,notOwner:{ai:o.ai,win:o.win}};try{fs.unlinkSync(l)}catch{}return{ok:true}}
++function release(name,ai){const l=lf(name);const o=read(l);if(!o)return{ok:true};const win=winId(ai);if((ai&&o.ai&&o.ai!==ai)||(o.win||'')!==(win||''))return{ok:false,notOwner:{ai:o.ai,win:o.win}};try{fs.unlinkSync(l);if(fs.existsSync(l))return{ok:false,error:'lock file still exists after release'};return{ok:true}}catch(e){return{ok:false,error:'lock release failed: '+e.message}}}
+ function status(){ensure();const t=now();return fs.readdirSync(DIR).filter(f=>f.endsWith('.lock')).map(f=>{const o=read(path.join(DIR,f));if(!o)return null;const age=Math.round((t-o.ts)/1000);return{name:o.name,ai:o.ai,win:o.win,pid:o.pid,age_s:age,stale:age*1000>o.ttl}}).filter(Boolean)}
+ // 判#1206 prune：自动清除陈旧租约（age>ttl=持有者未续约/已崩·与 acquire L24/L28 “陈旧即可覆盖”同一不变式）·根治“死锁永远滞留可见”
+ function prune(){ensure();const t=now();const rm=[];for(const f of fs.readdirSync(DIR).filter(x=>x.endsWith('.lock'))){const o=read(path.join(DIR,f));if(o&&!(t-o.ts<o.ttl)){try{fs.unlinkSync(path.join(DIR,f));rm.push(o.name)}catch{}}}return rm}
+@@ -201,7 +201,7 @@
+   else if(cmd==='release')r=release(name,ai);
+   else{console.log('用法: acquire|renew|release <资源> --ai <名> [--ttl 秒]  |  status  |  prune(清陈旧锁)');process.exit(2)}
+   if(r.ok){console.log(`${cmd} OK: ${name} @ ${ai}`);process.exit(0)}
+-  console.log(`${cmd} BUSY: ${name} 被 ${r.busy?r.busy.ai:'?'} 持有${r.busy?`(${r.busy.age_s}s)`:''}——等其释放或用 status 查看，勿强抢(会覆盖对方)`);
++  console.log(`${cmd} BUSY: ${name} 被 ${r.busy?r.busy.ai:'?'} 持有${r.busy?`(${r.busy.age_s}s)`:''}${r.error?'；'+r.error:''}——等其释放或用 status 查看，勿强抢(会覆盖对方)`);
+   process.exit(3);
+ }
+ module.exports={acquire,renew,release,status,check,guard,isGuarded,prune};

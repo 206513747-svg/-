@@ -1,0 +1,80 @@
+name: Extract vault repair source archive
+
+on:
+  push:
+    branches:
+      - ops/extract-vault-repair-source-20261106
+    paths:
+      - .github/workflows/extract-vault-repair-source.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout authorized extraction branch
+        uses: actions/checkout@v4
+
+      - name: Validate and extract ZIP safely
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path, PurePosixPath
+          from zipfile import ZipFile
+          import stat
+
+          archive = Path("vault-repair-source.zip")
+          if not archive.is_file():
+              raise SystemExit("STOP: vault-repair-source.zip missing at repository root")
+
+          out = Path("extracted-source").resolve()
+          out.mkdir(parents=True, exist_ok=True)
+
+          with ZipFile(archive) as z:
+              entries = z.infolist()
+              if not entries:
+                  raise SystemExit("STOP: archive is empty")
+              for info in entries:
+                  raw = info.filename.replace("\\\\", "/")
+                  p = PurePosixPath(raw)
+                  mode = info.external_attr >> 16
+                  if p.is_absolute() or ".." in p.parts or (mode and stat.S_ISLNK(mode)):
+                      raise SystemExit(f"STOP: unsafe ZIP entry: {info.filename}")
+                  target = (out / Path(*p.parts)).resolve()
+                  if out != target and out not in target.parents:
+                      raise SystemExit(f"STOP: ZIP entry escapes output: {info.filename}")
+              z.extractall(out)
+
+          files = sorted(p for p in out.rglob("*") if p.is_file())
+          if not files:
+              raise SystemExit("STOP: extraction produced no files")
+          print(f"EXTRACTED_FILES={len(files)}")
+          for p in files:
+              print(f"{p.relative_to(out)}\t{p.stat().st_size}")
+          PY
+
+      - name: Package extracted source for review
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile, ZIP_DEFLATED
+          root = Path("extracted-source")
+          files = sorted(p for p in root.rglob("*") if p.is_file())
+          with ZipFile("vault-repair-source-extracted.zip", "w", ZIP_DEFLATED) as z:
+              for p in files:
+                  z.write(p, p.relative_to(root).as_posix())
+          print(f"REVIEW_ARCHIVE_BYTES={Path('vault-repair-source-extracted.zip').stat().st_size}")
+          PY
+
+      - name: Upload extracted source artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vault-repair-source-extracted
+          path: vault-repair-source-extracted.zip
+          if-no-files-found: error
+          retention-days: 3

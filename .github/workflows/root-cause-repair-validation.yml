@@ -1,0 +1,94 @@
+name: Root-cause repair validation
+
+on:
+  push:
+    branches:
+      - ops/extract-vault-repair-source-20261106
+    paths:
+      - scripts/apply-root-cause-patches.py
+      - repair-source/tests/**
+      - .github/workflows/root-cause-repair-validation.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout isolated repair branch
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Extract and apply deterministic patches
+        shell: powershell
+        run: python scripts/apply-root-cause-patches.py
+      - name: Parse PowerShell 5.1 scripts
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = @(
+            'repair-source/vault-scripts/settle-session.ps1',
+            'repair-source/vault-scripts/upgrade.ps1',
+            'repair-source/vault-scripts/kernel.ps1',
+            'repair-source/tests/upgrade-lock-smoke.ps1'
+          )
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Join-Path $PWD $file), [ref]$tokens, [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error "$file : $($_.Message) at $($_.Extent.StartLineNumber)" }
+              throw "PowerShell parse failed: $file"
+            }
+            Write-Host "PASS PowerShell 5.1 parse: $file"
+          }
+      - name: Check JavaScript syntax
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Get-ChildItem repair-source/vault-scripts -Filter *.js | ForEach-Object {
+            node --check $_.FullName
+            if ($LASTEXITCODE -ne 0) { throw "Node syntax failed: $($_.Name)" }
+            Write-Host "PASS Node syntax: $($_.Name)"
+          }
+      - name: Run lock and fail-closed regression tests
+        shell: powershell
+        run: |
+          node repair-source/tests/root-cause-smoke.js
+          if ($LASTEXITCODE -ne 0) { throw 'Lock regression tests failed' }
+          node repair-source/tests/atomic-fail-closed.js
+          if ($LASTEXITCODE -ne 0) { throw 'Atomic JSON fail-closed test failed' }
+          node repair-source/tests/memory-sync-worktree-smoke.js
+          if ($LASTEXITCODE -ne 0) { throw 'Memory sync worktree test failed' }
+          . ./repair-source/tests/upgrade-lock-smoke.ps1
+      - name: Commit reviewed repair snapshot to isolated branch
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add repair-source
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) {
+            git commit -m 'fix: harden worktree boundaries and transaction fail-closed'
+            git push origin HEAD:ops/extract-vault-repair-source-20261106
+          } else {
+            Write-Host 'Repair snapshot unchanged; no commit required.'
+          }
+      - name: Upload validated repair snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: root-cause-repair-validated
+          path: repair-source
+          if-no-files-found: error
+          retention-days: 7

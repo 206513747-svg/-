@@ -1,0 +1,100 @@
+name: Verify vault repair patch
+
+on:
+  push:
+    branches:
+      - ops/extract-vault-repair-source-20261106
+    paths:
+      - vault-repair-fixes.patch
+      - .github/workflows/verify-vault-repair-patch.yml
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout isolated review branch
+        uses: actions/checkout@v4
+
+      - name: Reconstruct original eight-file source archive
+        shell: pwsh
+        run: |
+          @'
+          import io
+          from pathlib import Path
+          from zipfile import ZipFile
+          with ZipFile("vault-repair-source.zip") as outer:
+              nested = [n for n in outer.namelist() if n.lower().endswith(".zip")]
+              if len(nested) != 1:
+                  raise SystemExit(f"Expected one nested source ZIP, got: {nested}")
+              payload = outer.read(nested[0])
+          Path("source").mkdir(exist_ok=True)
+          with ZipFile(io.BytesIO(payload)) as inner:
+              inner.extractall("source")
+              names = sorted(inner.namelist())
+          print("SOURCE_FILES", len(names), names)
+          if len(names) != 8:
+              raise SystemExit("Expected exactly eight source files")
+          '@ | Set-Content -Encoding utf8 extract_source.py
+          python extract_source.py
+
+      - name: Apply reviewed patch to isolated source copy
+        shell: pwsh
+        run: |
+          git apply --check vault-repair-fixes.patch
+          git apply vault-repair-fixes.patch
+
+      - name: Parse changed PowerShell source
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'source/settle-session.ps1').Path,
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw "PowerShell parse failed"
+          }
+          Write-Output "PowerShell parse passed: settle-session.ps1"
+
+      - name: Check changed JavaScript syntax
+        shell: pwsh
+        run: |
+          node --check source/memory-sync.js
+          if ($LASTEXITCODE -ne 0) { throw "memory-sync.js parse failed" }
+          node --check source/ai-lock.js
+          if ($LASTEXITCODE -ne 0) { throw "ai-lock.js parse failed" }
+
+      - name: Smoke-test lock acquire and release in isolated temp directory
+        shell: pwsh
+        run: |
+          $lockDir = Join-Path $env:RUNNER_TEMP 'vault-ai-lock-smoke'
+          New-Item -ItemType Directory -Force -Path $lockDir | Out-Null
+          $env:AI_LOCK_DIR = $lockDir
+          $env:AI_WIN = 'window-A'
+          node source/ai-lock.js acquire smoke-resource --ai PATCH-TEST
+          if ($LASTEXITCODE -ne 0) { throw "Lock acquire failed" }
+          node source/ai-lock.js release smoke-resource --ai PATCH-TEST
+          if ($LASTEXITCODE -ne 0) { throw "Lock release failed" }
+          if (Test-Path (Join-Path $lockDir 'smoke-resource.lock')) {
+            throw "Lock file remained after successful release"
+          }
+          Write-Output "Lock acquire/release smoke test passed"
+
+      - name: Package patched source for next review stage
+        shell: pwsh
+        run: |
+          python -c "from pathlib import Path; from zipfile import ZipFile, ZIP_DEFLATED; p=Path('source'); z=ZipFile('vault-repair-source-patched.zip','w',ZIP_DEFLATED); [z.write(f, f.relative_to(p).as_posix()) for f in p.rglob('*') if f.is_file()]; z.close()"
+
+      - name: Upload patched source artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vault-repair-source-patched
+          path: vault-repair-source-patched.zip
+          if-no-files-found: error
+          retention-days: 3

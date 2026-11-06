@@ -45,8 +45,13 @@ jobs:
       - name: Apply reviewed patch to isolated source copy
         shell: pwsh
         run: |
-          git apply --check vault-repair-fixes.patch
-          git apply vault-repair-fixes.patch
+          Push-Location source
+          try {
+            git apply --check ../vault-repair-fixes.patch
+            git apply ../vault-repair-fixes.patch
+          } finally {
+            Pop-Location
+          }
 
       - name: Parse changed PowerShell source
         shell: pwsh

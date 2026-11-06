@@ -68,6 +68,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Lock regression tests failed' }
           node repair-source/tests/atomic-fail-closed.js
           if ($LASTEXITCODE -ne 0) { throw 'Atomic JSON fail-closed test failed' }
+          node repair-source/tests/memory-sync-worktree-smoke.js
+          if ($LASTEXITCODE -ne 0) { throw 'Memory sync worktree test failed' }
           . ./repair-source/tests/upgrade-lock-smoke.ps1
       - name: Commit reviewed repair snapshot to isolated branch
         shell: powershell

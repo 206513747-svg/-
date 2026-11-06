@@ -196,12 +196,14 @@ s = replace_once(s,
   const ROOT = fromRoot || (VR && VR.ROOT) || path.resolve(__dirname, '..');
   if (!fs.existsSync(ROOT)) throw new Error('当前 Vault 根不存在，拒绝回退到固定路径：' + ROOT);
 """, "global-master-root")
-s = replace_once(s,
-"""  const ROOT = fromRoot || (() => { try { return require('./vault-root.js').ROOT; } catch { return 'D:/Vault'; } })();
-""",
-"""  const ROOT = fromRoot || path.resolve(__dirname, '..');
-  if (!fs.existsSync(ROOT)) throw new Error('当前 Vault 根不存在，拒绝解析共享状态路径：' + ROOT);
-""", "global-resolve-root")
+old_root = """  const ROOT = fromRoot || (() => { try { return require(\'./vault-root.js\').ROOT; } catch { return \'D:/Vault\'; } })();
+"""
+new_root = """  const ROOT = fromRoot || path.resolve(__dirname, \'..\');
+  if (!fs.existsSync(ROOT)) throw new Error(\'当前 Vault 根不存在，拒绝解析共享状态路径：\' + ROOT);
+"""
+if s.count(old_root) != 2:
+    raise SystemExit(f"STOP: global-resolve-root expected 2 matches, found {s.count(old_root)}")
+s = s.replace(old_root, new_root)
 write("global-state.js", s)
 
 # 6) kernel: a corrupt state file is not the same as an absent state file.

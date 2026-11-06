@@ -832,7 +832,13 @@ if ($DirCleanCount -gt 0) { Write-Output "dir-cleanup:$DirCleanCount" }
 
 # 11. memory-sync：失败必须闭锁，只有写后验证通过才记入 Changes
 $MemorySyncScript = Join-Path $PSScriptRoot 'memory-sync.js'
-$HandoffPath = Join-Path $Vault 'vault-data\_session-handoff.md'
+$MemorySyncRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
+$VaultRoot = [System.IO.Path]::GetFullPath($Vault)
+if (-not $MemorySyncRoot.Equals($VaultRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "memory-sync 与 settle-session 工作树不一致，拒绝继续：script=$MemorySyncRoot vault=$VaultRoot"
+}
+$HandoffPath = Join-Path $MemorySyncRoot 'vault-data\_session-handoff.md'
+$MemorySyncStartedAt = Get-Date
 if (-not (Test-Path -LiteralPath $MemorySyncScript -PathType Leaf)) {
     throw "memory-sync 脚本缺失，停止结算：$MemorySyncScript"
 }
@@ -847,8 +853,8 @@ if (-not (Test-Path -LiteralPath $HandoffPath -PathType Leaf)) {
     throw "memory-sync 返回成功但 handoff 不存在，拒绝伪报完成：$HandoffPath"
 }
 $HandoffItem = Get-Item -LiteralPath $HandoffPath -ErrorAction Stop
-if ($HandoffItem.Length -le 0) {
-    throw "memory-sync 返回成功但 handoff 为空，拒绝伪报完成：$HandoffPath"
+if ($HandoffItem.Length -le 0 -or $HandoffItem.LastWriteTimeUtc -lt $MemorySyncStartedAt.ToUniversalTime()) {
+    throw "memory-sync 返回成功但 handoff 为空或未在本轮更新，拒绝伪报完成：$HandoffPath"
 }
 $Changes += "memory-sync"
 # （2026-08-11 精简：移除 startup-standard-read 挂载——gate 强制门已物理保证三卡已读，

@@ -22,18 +22,20 @@ jobs:
         shell: pwsh
         run: |
           @'
-          import io
-          from pathlib import Path
+          from pathlib import Path, PurePosixPath
           from zipfile import ZipFile
-          with ZipFile("vault-repair-source.zip") as outer:
-              nested = [n for n in outer.namelist() if n.lower().endswith(".zip")]
-              if len(nested) != 1:
-                  raise SystemExit(f"Expected one nested source ZIP, got: {nested}")
-              payload = outer.read(nested[0])
-          Path("source").mkdir(exist_ok=True)
-          with ZipFile(io.BytesIO(payload)) as inner:
-              inner.extractall("source")
-              names = sorted(inner.namelist())
+          import stat
+          archive = Path("vault-repair-source.zip")
+          out = Path("source").resolve()
+          out.mkdir(exist_ok=True)
+          with ZipFile(archive) as z:
+              names = sorted(z.namelist())
+              for name in names:
+                  p = PurePosixPath(name)
+                  mode = z.getinfo(name).external_attr >> 16
+                  if p.is_absolute() or ".." in p.parts or (mode and stat.S_ISLNK(mode)):
+                      raise SystemExit(f"Unsafe archive entry: {name}")
+              z.extractall(out)
           print("SOURCE_FILES", len(names), names)
           if len(names) != 8:
               raise SystemExit("Expected exactly eight source files")

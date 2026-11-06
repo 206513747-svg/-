@@ -153,7 +153,7 @@ s = s[:start] + """function guard(name,ai){
 }
 """ + s[end:]
 start = s.index("function check(name,ai)")
-end = s.index("\\n\\nif(require.main", start)
+end = s.index("\n\nif(require.main", start)
 s = s[:start] + """function check(name,ai){
   ensure();
   const file=lf(name);

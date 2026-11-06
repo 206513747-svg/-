@@ -1,0 +1,30 @@
+'use strict';
+const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vault-root-cause-'));
+process.env.AI_LOCK_DIR = path.join(tmp, 'locks');
+const locks = require('../vault-scripts/ai-lock.js');
+try {
+  process.env.AI_WIN = 'window-A';
+  assert.strictEqual(locks.acquire('judgment-log.md', 'same-ai', { ttl: 30 }).ok, true);
+  process.env.AI_WIN = 'window-B';
+  assert.strictEqual(locks.check('judgment-log.md', 'same-ai').held, true);
+  const guarded = locks.guard('judgment-log.md', 'same-ai');
+  assert.strictEqual(guarded.free, false);
+  assert.strictEqual(locks.release('judgment-log.md', 'same-ai').ok, false);
+  process.env.AI_WIN = 'window-A';
+  assert.strictEqual(locks.release('judgment-log.md', 'same-ai').ok, true);
+  process.env.AI_WIN = 'window-B';
+  assert.strictEqual(locks.check('judgment-log.md', 'same-ai').held, false);
+  const corrupt = path.join(process.env.AI_LOCK_DIR, 'entry-gate.json.lock');
+  fs.mkdirSync(process.env.AI_LOCK_DIR, { recursive: true });
+  fs.writeFileSync(corrupt, '{broken');
+  const failClosed = locks.guard('entry-gate.json', 'same-ai');
+  assert.strictEqual(failClosed.free, false);
+  assert.strictEqual(failClosed.invalid, true);
+  console.log('PASS same-AI multi-window exclusion');
+  console.log('PASS guard fail-closed on corrupt lock metadata');
+  console.log('PASS owner-only release');
+} finally { fs.rmSync(tmp, { recursive: true, force: true }); }

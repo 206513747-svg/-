@@ -337,6 +337,53 @@ s = replace_once(s,
 'upgrade-release')
 write("upgrade.ps1", s, True)
 
+# 8) Serialize each short-lived PowerShell command too; the long-lived transaction lease alone is re-entrant.
+s = replace_once(s, "function Show-Upgrade {", "function Show-UpgradeCore {", "upgrade-show-core")
+s = replace_once(s, "function Invoke-UpgradeAction {", "function Invoke-UpgradeActionCore {", "upgrade-action-core")
+s += r"""
+function Enter-UpgradeCommandLock {
+    $lockScript = Join-Path $PSScriptRoot 'ai-lock.js'
+    if (-not (Test-Path -LiteralPath $lockScript -PathType Leaf)) {
+        Write-Host "  ⛔ ai-lock.js 缺失，拒绝运行升级命令" -ForegroundColor Red
+        return $false
+    }
+    $aiName = if ($env:AI_NAME) { "$env:AI_NAME" } else { 'anon' }
+    $LASTEXITCODE = 0
+    $output = @(& node $lockScript acquire upgrade-pipeline-command --ai $aiName 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  ⛔ 升级命令互斥锁获取失败：$(($output | Out-String).Trim())" -ForegroundColor Red
+        return $false
+    }
+    $script:UpgradeCommandLockAi = $aiName
+    return $true
+}
+function Exit-UpgradeCommandLock {
+    if (-not $script:UpgradeCommandLockAi) { return $false }
+    $lockScript = Join-Path $PSScriptRoot 'ai-lock.js'
+    $LASTEXITCODE = 0
+    $output = @(& node $lockScript release upgrade-pipeline-command --ai $script:UpgradeCommandLockAi 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  ⛔ 升级命令锁释放失败：$(($output | Out-String).Trim())" -ForegroundColor Red
+        return $false
+    }
+    $script:UpgradeCommandLockAi = $null
+    return $true
+}
+function Show-Upgrade {
+    param([string]$ProposalPath = '')
+    if (-not (Enter-UpgradeCommandLock)) { return }
+    try { Show-UpgradeCore -ProposalPath $ProposalPath }
+    finally { if (-not (Exit-UpgradeCommandLock)) { throw "升级命令锁未能安全释放" } }
+}
+function Invoke-UpgradeAction {
+    param([string]$subCmd = '', [string]$arg = '')
+    if (-not (Enter-UpgradeCommandLock)) { return }
+    try { Invoke-UpgradeActionCore -subCmd $subCmd -arg $arg }
+    finally { if (-not (Exit-UpgradeCommandLock)) { throw "升级命令锁未能安全释放" } }
+}
+"""
+write("upgrade.ps1", s, True)
+
 # Keep all eight original files together; health-radar is reviewed but unchanged in this patch set.
 write("health-radar.js", read("health-radar.js"))
 print("Patched 7 files; health-radar.js retained unchanged.")

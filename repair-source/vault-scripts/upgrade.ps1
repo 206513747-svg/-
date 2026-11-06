@@ -2,7 +2,7 @@
 # 被 kernel.ps1 dot-source 调用
 # 依赖: $vault (kernel.ps1 顶部定义), Get-State (kernel.ps1 函数)
 
-function Show-Upgrade {
+function Show-UpgradeCore {
     param([string]$ProposalPath = '')
     # ── 自动升级管线 v2 ──
     # 检测变更 → 分类等级 → 列出所需审批 → 跟踪状态 → 执行版本
@@ -445,7 +445,7 @@ function Exit-UpgradeLock {
         return $false
     }
 }
-function Invoke-UpgradeAction {
+function Invoke-UpgradeActionCore {
     param([string]$subCmd = '', [string]$arg = '')
     $vPath = "$vault\VERSION.md"
     $statePath = "$vault\vault-scripts\_system-state.json"
@@ -912,4 +912,45 @@ function Invoke-UpgradeAction {
     Write-Host '  kernel upgrade --reject  审计       — 驳回该角色' -ForegroundColor DarkGray
     Write-Host '  kernel upgrade --confirm           — 所有审批通过后执行升级' -ForegroundColor DarkGray
     Write-Host '  ═══' -ForegroundColor Cyan
+}
+
+function Enter-UpgradeCommandLock {
+    $lockScript = Join-Path $PSScriptRoot 'ai-lock.js'
+    if (-not (Test-Path -LiteralPath $lockScript -PathType Leaf)) {
+        Write-Host "  ⛔ ai-lock.js 缺失，拒绝运行升级命令" -ForegroundColor Red
+        return $false
+    }
+    $aiName = if ($env:AI_NAME) { "$env:AI_NAME" } else { 'anon' }
+    $LASTEXITCODE = 0
+    $output = @(& node $lockScript acquire upgrade-pipeline-command --ai $aiName 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  ⛔ 升级命令互斥锁获取失败：$(($output | Out-String).Trim())" -ForegroundColor Red
+        return $false
+    }
+    $script:UpgradeCommandLockAi = $aiName
+    return $true
+}
+function Exit-UpgradeCommandLock {
+    if (-not $script:UpgradeCommandLockAi) { return $false }
+    $lockScript = Join-Path $PSScriptRoot 'ai-lock.js'
+    $LASTEXITCODE = 0
+    $output = @(& node $lockScript release upgrade-pipeline-command --ai $script:UpgradeCommandLockAi 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  ⛔ 升级命令锁释放失败：$(($output | Out-String).Trim())" -ForegroundColor Red
+        return $false
+    }
+    $script:UpgradeCommandLockAi = $null
+    return $true
+}
+function Show-Upgrade {
+    param([string]$ProposalPath = '')
+    if (-not (Enter-UpgradeCommandLock)) { return }
+    try { Show-UpgradeCore -ProposalPath $ProposalPath }
+    finally { if (-not (Exit-UpgradeCommandLock)) { throw "升级命令锁未能安全释放" } }
+}
+function Invoke-UpgradeAction {
+    param([string]$subCmd = '', [string]$arg = '')
+    if (-not (Enter-UpgradeCommandLock)) { return }
+    try { Invoke-UpgradeActionCore -subCmd $subCmd -arg $arg }
+    finally { if (-not (Exit-UpgradeCommandLock)) { throw "升级命令锁未能安全释放" } }
 }

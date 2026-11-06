@@ -208,7 +208,7 @@ write("global-state.js", s)
 s = read("kernel.ps1")
 s = replace_once(s,
 "        try { return Get-Content $stateFile -Encoding UTF8 | ConvertFrom-Json } catch { return $null }",
-"        try { return Get-Content $stateFile -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop } catch { throw \\"内核状态文件存在但无法解析，拒绝按未初始化处理或覆盖：$stateFile；$($_.Exception.Message)\\" }",
+'        try { return Get-Content $stateFile -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop } catch { throw "内核状态文件存在但无法解析，拒绝按未初始化处理或覆盖：$stateFile；$($_.Exception.Message)" }',
 "kernel-state-failclosed")
 write("kernel.ps1", s, True)
 

@@ -341,11 +341,10 @@ function Select-UpgradeKey {
 }
 
 function Get-UpgradeLockPath {
-    $commonRaw = (& git -C $vault rev-parse --git-common-dir 2>$null | Select-Object -First 1)
-    if ($LASTEXITCODE -ne 0 -or -not $commonRaw) { throw "无法解析 Git common-dir，拒绝创建局部升级锁：$vault" }
-    $commonRaw = "$commonRaw".Trim()
-    if ([System.IO.Path]::IsPathRooted($commonRaw)) { $common = [System.IO.Path]::GetFullPath($commonRaw) }
-    else { $common = [System.IO.Path]::GetFullPath((Join-Path $vault $commonRaw)) }
+    $commonRaw = & git -C "$vault" rev-parse --path-format=absolute --git-common-dir 2>$null
+    $gitExit = $LASTEXITCODE
+    if ($gitExit -ne 0 -or -not $commonRaw) { throw "无法解析 Git common-dir，拒绝创建局部升级锁：$vault" }
+    $common = [System.IO.Path]::GetFullPath(("$commonRaw" | Select-Object -First 1).Trim())
     if (-not (Test-Path -LiteralPath $common -PathType Container)) { throw "Git common-dir 不存在：$common" }
     return (Join-Path $common 'upgrade-pipeline.lock')
 }

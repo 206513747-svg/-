@@ -9,7 +9,7 @@ on:
       - .github/workflows/verify-vault-repair-patch.yml
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   verify:
@@ -105,3 +105,16 @@ jobs:
           path: vault-repair-source-patched.zip
           if-no-files-found: error
           retention-days: 3
+
+      - name: Commit tested source snapshot to isolated review branch
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path review-source | Out-Null
+          Copy-Item -Path source/* -Destination review-source/ -Force
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add review-source/
+          git commit -m "ops: preserve tested repair source snapshot" --quiet
+          if ($LASTEXITCODE -ne 0) { throw "Could not commit tested source snapshot" }
+          git push origin HEAD:ops/extract-vault-repair-source-20261106
+          if ($LASTEXITCODE -ne 0) { throw "Could not push tested source snapshot" }

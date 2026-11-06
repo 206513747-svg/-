@@ -27,10 +27,10 @@
  if ($DirCleanCount -gt 0) { Write-Output "dir-cleanup:$DirCleanCount" }
  
 -# 11. memory-sync: 自动生成_session-handoff.md(由内而外:memory-sync.js已存在,缺调用)
--& node "$Vault\\vault-scripts\\memory-sync.js" 2>&1 | Out-Null
+-& node "$Vault\vault-scripts\memory-sync.js" 2>&1 | Out-Null
 +# 11. memory-sync: 自动生成_session-handoff.md；失败必须阻断，不得记假成功
-+$MemorySyncScript = Join-Path $Vault 'vault-scripts\\memory-sync.js'
-+$HandoffPath = Join-Path $Vault 'vault-data\\_session-handoff.md'
++$MemorySyncScript = Join-Path $Vault 'vault-scripts\memory-sync.js'
++$HandoffPath = Join-Path $Vault 'vault-data\_session-handoff.md'
 +if (-not (Test-Path -LiteralPath $MemorySyncScript -PathType Leaf)) {
 +    throw "memory-sync 脚本不存在：$MemorySyncScript"
 +}

@@ -348,9 +348,10 @@ function Enter-UpgradeCommandLock {
         return $false
     }
     $aiName = if ($env:AI_NAME) { "$env:AI_NAME" } else { 'anon' }
-    $LASTEXITCODE = 0
+    $global:LASTEXITCODE = 0
     $output = @(& node $lockScript acquire upgrade-pipeline-command --ai $aiName 2>&1)
-    if ($LASTEXITCODE -ne 0) {
+    $nodeExit = $global:LASTEXITCODE
+    if ($nodeExit -ne 0) {
         Write-Host "  ⛔ 升级命令互斥锁获取失败：$(($output | Out-String).Trim())" -ForegroundColor Red
         return $false
     }
@@ -360,9 +361,10 @@ function Enter-UpgradeCommandLock {
 function Exit-UpgradeCommandLock {
     if (-not $script:UpgradeCommandLockAi) { return $false }
     $lockScript = Join-Path $PSScriptRoot 'ai-lock.js'
-    $LASTEXITCODE = 0
+    $global:LASTEXITCODE = 0
     $output = @(& node $lockScript release upgrade-pipeline-command --ai $script:UpgradeCommandLockAi 2>&1)
-    if ($LASTEXITCODE -ne 0) {
+    $nodeExit = $global:LASTEXITCODE
+    if ($nodeExit -ne 0) {
         Write-Host "  ⛔ 升级命令锁释放失败：$(($output | Out-String).Trim())" -ForegroundColor Red
         return $false
     }
